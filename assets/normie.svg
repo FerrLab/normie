@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="Normie">
+  <title>Normie</title>
+  <defs>
+    <linearGradient id="normie-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5b5fef"/>
+      <stop offset="1" stop-color="#9d4edd"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="230.4" fill="url(#normie-bg)"/>
+  <rect x="102.4" y="285.7" width="819.2" height="22.53" rx="11.26" fill="#5eead4"/>
+  <rect x="102.4" y="715.78" width="819.2" height="22.53" rx="11.26" fill="#5eead4"/>
+  <rect x="156.16" y="174.08" width="97.28" height="675.84" rx="48.64" fill="#ffffff"/>
+  <rect x="309.76" y="389.12" width="97.28" height="245.76" rx="48.64" fill="#ffffff"/>
+  <rect x="463.36" y="296.96" width="97.28" height="430.08" rx="48.64" fill="#ffffff"/>
+  <rect x="616.96" y="296.96" width="97.28" height="430.08" rx="48.64" fill="#ffffff"/>
+  <rect x="770.56" y="296.96" width="97.28" height="430.08" rx="48.64" fill="#ffffff"/>
+</svg>

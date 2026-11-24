@@ -1,20 +1,20 @@
 name: Release
 
-# Disparo manual: Actions → Release → "Run workflow", informando a versão.
+# Manual trigger: Actions → Release → "Run workflow", entering the version.
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Versão (ex.: 1.0.0) — cria a tag v1.0.0"
+        description: "Version (e.g. 1.0.0) — creates the tag v1.0.0"
         required: true
         type: string
       prerelease:
-        description: "Marcar como pré-lançamento"
+        description: "Mark as a pre-release"
         type: boolean
         default: false
 
 permissions:
-  contents: write  # criar a tag e a release
+  contents: write  # create the tag and the release
 
 concurrency:
   group: release
@@ -27,20 +27,20 @@ jobs:
       run:
         shell: bash
     env:
-      # Inputs entram por variável de ambiente, nunca interpolados direto no script.
+      # Inputs go through environment variables, never interpolated straight into scripts.
       VERSION: ${{ inputs.version }}
       TAG: v${{ inputs.version }}
     steps:
       - uses: actions/checkout@v7
 
-      - name: Validar versão
+      - name: Validate version
         run: |
           if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
-            echo "::error::Versão inválida: '$VERSION' (use algo como 1.2.3)"
+            echo "::error::Invalid version: '$VERSION' (use something like 1.2.3)"
             exit 1
           fi
           if git ls-remote --exit-code --tags origin "refs/tags/$TAG" > /dev/null; then
-            echo "::error::A tag $TAG já existe"
+            echo "::error::Tag $TAG already exists"
             exit 1
           fi
 
@@ -50,34 +50,34 @@ jobs:
           cache: pip
           cache-dependency-path: requirements.txt
 
-      - name: Instalar dependências
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
 
-      - name: Carimbar a versão no script
+      - name: Stamp the version into the script
         run: |
           sed -i "s/^APP_VERSION = \"dev\"/APP_VERSION = \"$VERSION\"/" discord_normalizer.py
           grep -q "^APP_VERSION = \"$VERSION\"" discord_normalizer.py
 
-      - name: Conferir que o script importa
+      - name: Check that the script imports
         run: python -c "import discord_normalizer as d; print(d.APP_NAME, d.APP_VERSION)"
 
-      - name: Gerar o ícone
+      - name: Build the icon
         run: >
           python -c "import discord_normalizer as d;
           d.make_icon_image(256).save('normie.ico',
           sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])"
 
-      - name: Gerar o .exe
-        # pystray escolhe o backend em tempo de execução: o PyInstaller não o enxerga sozinho.
+      - name: Build the .exe
+        # pystray picks its backend at runtime, so PyInstaller can't see it on its own.
         run: >
           pyinstaller --noconfirm --onefile --windowed
           --name normie --icon normie.ico
           --hidden-import pystray._win32
           discord_normalizer.py
 
-      - name: Preparar arquivos
+      - name: Collect release files
         run: |
           mkdir -p release
           cp dist/normie.exe release/normie.exe
@@ -86,7 +86,7 @@ jobs:
           cd release && sha256sum normie.exe normie.py requirements.txt > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
-      - name: Publicar a release
+      - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
           PRERELEASE: ${{ inputs.prerelease }}

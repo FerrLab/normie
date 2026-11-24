@@ -1,22 +1,31 @@
-# Normie
+<p align="center">
+  <img src="assets/normie.svg" width="140" alt="Normie logo: voice bars leveled between two mint lines">
+</p>
 
-Normalizador de voz para o Discord: equaliza **o que você ouve** numa call. Quem fala
-alto demais é abaixado, quem fala baixinho é aumentado — automaticamente, enquanto a
-call acontece.
+<h1 align="center">Normie</h1>
 
-- Só afeta **você**. O Normie mexe no mesmo controle de
-  *clique direito no amigo → Volume do usuário* do seu Discord.
-- Seus amigos não instalam nada e não percebem nada.
-- Ao fechar o app, o próprio Discord devolve os volumes que estavam antes.
+<p align="center">
+  Voice normalizer for Discord<br>
+  <a href="https://github.com/FerrLab/normie/releases/latest"><b>Download normie.exe</b></a>
+</p>
 
-## Instalar
+Normie evens out **what you hear** in a Discord call: people who are too loud get turned
+down, people who are too quiet get turned up — automatically, while the call is going on.
 
-**Opção 1 — `.exe` (sem Python):** baixe o `normie.exe` da
-[última release](https://github.com/FerrLab/normie/releases/latest) e abra.
-O Windows SmartScreen pode avisar que o app não é assinado → *Mais informações* →
-*Executar assim mesmo*.
+- It only affects **you**. Normie uses the same control as
+  *right-click a user → User Volume* in your Discord.
+- Your friends don't install anything and don't notice anything.
+- When you close Normie, Discord restores the volumes you had before.
+- Everything runs on your computer — see [Privacy](#privacy).
 
-**Opção 2 — Python 3.10+:** baixe o `normie.py` da release (ou clone o repo) e rode:
+## Install
+
+**Option 1 — `.exe` (no Python needed):** download `normie.exe` from the
+[latest release](https://github.com/FerrLab/normie/releases/latest) and run it.
+Windows SmartScreen may warn that the app isn't signed → *More info* → *Run anyway*.
+
+**Option 2 — Python 3.10+:** download `normie.py` from the release (or clone this repo)
+and run:
 
 ```powershell
 pip install -r requirements.txt
@@ -26,87 +35,129 @@ pip install -r requirements.txt
 python discord_normalizer.py
 ```
 
-## Como usar
+## Usage
 
-1. Clique em **Conectar**.
-2. Na primeira vez, o Discord mostra um pedido de autorização → **Autorizar**.
-   Depois disso o app reconecta sozinho sempre que abrir.
-3. Entre numa call. Cada pessoa aparece num cartão:
-   - **barra**: o quão alto você está ouvindo a pessoa, com a marca branca no alvo
-     (verde = no alvo, amarelo = baixo, vermelho = alto);
-   - **"microfone chega a …"**: o nível dela antes do seu volume;
-   - **volume** atual no seu Discord, com ▲/▼ logo após um ajuste;
-   - **AUTO / TRAVADO**: clique para impedir ajustes naquela pessoa (ex.: bot de música).
-4. **Bandeja:** minimizar esconde a janela no ícone perto do relógio, e o Normie continua
-   trabalhando. Clique no ícone para abrir; clique com o botão direito para
-   ligar/desligar a normalização ou sair. Fechar a janela (X) encerra o app.
+1. Click **Connect**.
+2. The first time, Discord shows an authorization request → **Authorize**.
+   After that, Normie reconnects on its own whenever it starts.
+3. Join a voice call. Each person shows up on a card:
+   - **bar**: how loud you hear them, with a white mark at the target
+     (green = on target, yellow = quiet, red = loud);
+   - **"mic reaches …"**: their level before your volume is applied;
+   - their **volume** in your Discord, with ▲/▼ right after an adjustment;
+   - **AUTO / LOCKED**: click to stop adjusting that person (e.g. a music bot).
+4. **Tray:** minimizing hides the window in the icon near the clock while Normie keeps
+   working. Click the icon to open it; right-click to toggle normalization or quit.
+   Closing the window (X) quits Normie.
 
-### Ajustes
+### Settings
 
-| Controle | O que faz |
+| Control | What it does |
 |---|---|
-| Normalização automática | Liga/desliga os ajustes (a medição continua). |
-| Nível alvo | Para onde todo mundo é puxado. Ajuste de ouvido. |
-| Ajustes avançados → Velocidade | Quanto do erro é corrigido a cada ~2 s de fala. |
-| Ajustes avançados → Volume permitido | Limites do slider (o Discord aceita 0–200%). |
-| Ajustes avançados → Saída monitorada | Dispositivo onde o Discord toca (fone/caixa). |
-| Ajustes avançados → Minimizar esconde na bandeja | Desligue para minimizar normalmente. |
-| Atividade | Histórico de ajustes e erros. |
+| Auto-normalize | Turns adjustments on/off (measuring continues). |
+| Target level | Where everyone gets pulled to. Set it by ear. |
+| Advanced settings → Speed | How much of the error is corrected per ~2 s of speech. |
+| Advanced settings → Allowed volume | Limits for the volume (Discord accepts 0–200%). |
+| Advanced settings → Monitored output | The device Discord plays on (headset/speakers). |
+| Advanced settings → Minimizing hides Normie in the tray | Turn off to minimize normally. |
+| Activity | History of adjustments and errors. |
 
-## Como funciona
+## How it works
 
 ```
- sua placa de som ──loopback──►  mede o nível (dBFS) a cada 100 ms
+ your sound card ──loopback──►  measures the level (dBFS) every 100 ms
                                         │
- Discord (RPC local) ──SPEAKING_START──► quem está falando agora?
-                                        │  só 1 amigo falando → o nível é dele
+ Discord (local RPC) ──SPEAKING_START──► who is talking right now?
+                                        │  only 1 friend talking → the level is theirs
                                         ▼
-                         a cada ~2 s de fala dessa pessoa:
-                         compute_new_volume() decide o novo volume
+                         after ~2 s of that person's speech:
+                         compute_new_volume() picks the new volume
                                         │
- Discord ◄──SET_USER_VOICE_SETTINGS─────┘  (slider de volume daquele amigo)
+ Discord ◄──SET_USER_VOICE_SETTINGS─────┘  (that friend's volume slider)
 ```
 
-O login usa o app do Discord cujo ID está em `CLIENT_ID`, no topo do script. Ele é um
-**Public Client**, então a autorização usa PKCE: cada login gera um código aleatório de
-uso único no lugar de uma senha do app, e não existe Client Secret.
+Normie logs in with the Discord application whose ID is in `CLIENT_ID`, at the top of
+the script. It's a **Public Client**, so authorization uses PKCE: every login creates a
+one-time random code instead of an app password, and there is no client secret.
 
-## Usando em outra conta ou com outro app
+## Privacy
 
-- **Outra conta do Discord:** o Discord só libera RPC de apps não aprovados para o dono e
-  para contas autorizadas no app. Se um amigo for usar o script com este `CLIENT_ID`, a
-  conta dele precisa ser adicionada ao app no Developer Portal; senão a autorização falha.
-- **Seu próprio app:** crie um em <https://discord.com/developers/applications>. Em
-  **OAuth2**, ligue **Public Client**, adicione o redirect `http://localhost` e troque o
-  `CLIENT_ID` no topo do script.
+All processing happens on your computer:
 
-## Limitações
+- **Audio is never recorded.** Every 100 ms, the sound on your output device is reduced
+  to a single loudness number, kept only in memory.
+- **The only internet request** goes to `discord.com/api/oauth2/token`, to get or
+  refresh your login token. Talking to Discord itself goes through a local pipe on your
+  computer.
+- **No** analytics, telemetry, crash reports, update checks or third-party services.
+  This was verified by auditing the code and its dependencies and by monitoring the
+  app's connections while it ran connected to Discord.
 
-- **Outros sons na mesma saída atrapalham a medição.** O app mede tudo que toca no
-  dispositivo escolhido. Jogo ou música alta junto da fala distorcem a leitura. Se puder,
-  ponha o Discord numa saída e o jogo em outra (Discord → Configurações → Voz e Vídeo →
-  Dispositivo de saída) e escolha a do Discord em *Saída monitorada*.
-- **Só mede quando uma pessoa fala sozinha.** Com fala sobreposta, nada é medido e os
-  volumes ficam onde estão.
-- **200% é o teto do Discord (~+6 dB).** Quem tem microfone muito baixo pode não
-  alcançar o alvo.
-- **Um app de cada vez.** O Discord só deixa um programa controlar voice settings por RPC
-  de cada vez. Plugins de Stream Deck/Touch Portal para o Discord podem conflitar.
-- Windows apenas (usa WASAPI e o pipe IPC do Discord desktop).
+Full details in the [Privacy Policy](PRIVACY.md).
 
-## Arquivo de configuração
+## Using Normie with other accounts or your own app
 
-`discord_normalizer_config.json` (criado ao lado do script ou do `.exe`) guarda os
-ajustes e o **token de acesso** em texto puro. Não compartilhe esse arquivo; ele já está
-no `.gitignore`.
+- **Other Discord accounts:** for apps that Discord hasn't approved for RPC, only the
+  app's owner and authorized accounts — members of the app's team and its testers — can
+  connect. Add your friends to the team or as testers in the Developer Portal;
+  otherwise their authorization will be refused.
+- **Your own app:** create one at <https://discord.com/developers/applications>. Under
+  **OAuth2**, turn on **Public Client**, add the redirect `http://localhost` and replace
+  `CLIENT_ID` at the top of the script.
 
-## Publicar uma versão
+## Limitations
 
-Em **Actions → Release → Run workflow**, informe a versão (ex.: `1.0.0`). O workflow, num
-runner Windows:
+- **Other sounds on the same output skew the measurement.** Normie measures everything
+  that plays on the selected device, so loud games or music mixed with voices distort the
+  reading. If you can, put Discord on one output and games on another (Discord → Settings
+  → Voice & Video → Output Device) and pick Discord's device in *Monitored output*.
+- **It only measures when one person speaks alone.** When people talk over each other,
+  nothing is measured and volumes stay where they are.
+- **200% is Discord's ceiling (about +6 dB).** Someone with a very quiet mic may not
+  reach the target.
+- **One app at a time.** Discord lets only one program control voice settings over RPC
+  at a time, so Stream Deck/Touch Portal plugins for Discord may conflict.
+- Windows only (it uses WASAPI and the Discord desktop app's IPC pipe).
 
-1. valida a versão e confere que a tag `v1.0.0` ainda não existe;
-2. grava a versão no script (`APP_VERSION`) e confere que ele importa;
-3. gera o ícone e o `normie.exe` com PyInstaller (`--onefile --windowed`);
-4. cria a release `v1.0.0` com `normie.exe`, `normie.py`, `requirements.txt` e
-   `SHA256SUMS.txt`, com notas geradas a partir dos commits.
+## Configuration file
+
+`discord_normalizer_config.json` (created next to the script or the `.exe`) stores your
+settings and your Discord **access token** in plain text. Don't share it; it's already in
+`.gitignore`.
+
+## Brand assets
+
+Voice bars: one too loud, one too quiet and three leveled inside the target band —
+exactly what Normie does to your call.
+
+<p align="center"><img src="assets/normie-banner.png" width="680" alt="Normie banner"></p>
+
+| File | Use |
+|---|---|
+| [`assets/normie.svg`](assets/normie.svg) | Vector logo, for the web and documents. |
+| [`assets/normie.png`](assets/normie.png) | 1024 px with rounded corners (app icon). |
+| [`assets/normie-discord.png`](assets/normie-discord.png) | 1024 px, full square with margin for Discord's circular crop (app icon in the Developer Portal or server icon). |
+| [`assets/normie-banner.png`](assets/normie-banner.png) | 680×240 banner for Discord; keeps the bottom-left free for the avatar. |
+
+The logo's geometry lives in `LOGO`, at the top of the script's GUI section — the window,
+tray and `.exe` icons are drawn from it.
+
+## Releasing a version
+
+Go to **Actions → Release → Run workflow** and enter the version (e.g. `1.0.0`). On a
+Windows runner, the workflow:
+
+1. validates the version and checks that the tag `v1.0.0` doesn't exist yet;
+2. writes the version into the script (`APP_VERSION`) and checks that it imports;
+3. builds the icon and `normie.exe` with PyInstaller (`--onefile --windowed`);
+4. creates the `v1.0.0` release with `normie.exe`, `normie.py`, `requirements.txt` and
+   `SHA256SUMS.txt`, with notes generated from the commits.
+
+## Legal
+
+- [Terms of Service](TERMS.md)
+- [Privacy Policy](PRIVACY.md)
+- [MIT License](LICENSE)
+
+Normie is an independent project and is not affiliated with, endorsed by or sponsored by
+Discord Inc.

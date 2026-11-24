@@ -1,4 +1,4 @@
-# Configuração local: guarda o token de acesso do Discord — nunca versionar
+# Local configuration: holds the Discord access token — never commit it
 discord_normalizer_config.json
 *.tmp
 
