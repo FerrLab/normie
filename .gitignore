@@ -1,0 +1,16 @@
+# Configuração local: guarda o token de acesso do Discord — nunca versionar
+discord_normalizer_config.json
+*.tmp
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# PyInstaller
+build/
+dist/
+*.spec
+*.ico
+release/

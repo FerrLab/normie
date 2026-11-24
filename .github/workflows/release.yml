@@ -1,0 +1,100 @@
+name: Release
+
+# Disparo manual: Actions → Release → "Run workflow", informando a versão.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Versão (ex.: 1.0.0) — cria a tag v1.0.0"
+        required: true
+        type: string
+      prerelease:
+        description: "Marcar como pré-lançamento"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write  # criar a tag e a release
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      # Inputs entram por variável de ambiente, nunca interpolados direto no script.
+      VERSION: ${{ inputs.version }}
+      TAG: v${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Validar versão
+        run: |
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Versão inválida: '$VERSION' (use algo como 1.2.3)"
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" > /dev/null; then
+            echo "::error::A tag $TAG já existe"
+            exit 1
+          fi
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Instalar dependências
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Carimbar a versão no script
+        run: |
+          sed -i "s/^APP_VERSION = \"dev\"/APP_VERSION = \"$VERSION\"/" discord_normalizer.py
+          grep -q "^APP_VERSION = \"$VERSION\"" discord_normalizer.py
+
+      - name: Conferir que o script importa
+        run: python -c "import discord_normalizer as d; print(d.APP_NAME, d.APP_VERSION)"
+
+      - name: Gerar o ícone
+        run: >
+          python -c "import discord_normalizer as d;
+          d.make_icon_image(256).save('normie.ico',
+          sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])"
+
+      - name: Gerar o .exe
+        # pystray escolhe o backend em tempo de execução: o PyInstaller não o enxerga sozinho.
+        run: >
+          pyinstaller --noconfirm --onefile --windowed
+          --name normie --icon normie.ico
+          --hidden-import pystray._win32
+          discord_normalizer.py
+
+      - name: Preparar arquivos
+        run: |
+          mkdir -p release
+          cp dist/normie.exe release/normie.exe
+          cp discord_normalizer.py release/normie.py
+          cp requirements.txt release/requirements.txt
+          cd release && sha256sum normie.exe normie.py requirements.txt > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Publicar a release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          flags=()
+          if [[ "$PRERELEASE" == "true" ]]; then flags+=(--prerelease); fi
+          gh release create "$TAG" release/* \
+            --target "$GITHUB_SHA" \
+            --title "Normie $TAG" \
+            --generate-notes \
+            "${flags[@]}"
