@@ -141,6 +141,7 @@ exactly what Normie does to your call.
 | [`assets/normie.png`](assets/normie.png) | 1024 px with rounded corners (app icon). |
 | [`assets/normie-discord.png`](assets/normie-discord.png) | 1024 px, full square with margin for Discord's circular crop (app icon in the Developer Portal or server icon). |
 | [`assets/normie-banner.png`](assets/normie-banner.png) | 680×240 banner for Discord; keeps the bottom-left free for the avatar. |
+| [`assets/normie-social.png`](assets/normie-social.png) | 1280×640 social share image: GitHub's social preview (*Settings → General → Social preview*) and link cards elsewhere. |
 
 The logo's geometry lives in `LOGO`, at the top of the script's GUI section — the window,
 tray and `.exe` icons are drawn from it.
