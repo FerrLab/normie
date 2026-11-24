@@ -24,16 +24,18 @@ down, people who are too quiet get turned up — automatically, while the call i
 [latest release](https://github.com/FerrLab/normie/releases/latest) and run it.
 Windows SmartScreen may warn that the app isn't signed → *More info* → *Run anyway*.
 
-**Option 2 — Python 3.10+:** download `normie.py` from the release (or clone this repo)
-and run:
+**Option 2 — Python 3.10+:** download `normie.pyz` and `requirements.txt` from the
+[latest release](https://github.com/FerrLab/normie/releases/latest) and run:
 
 ```powershell
 pip install -r requirements.txt
 ```
 
 ```powershell
-python discord_normalizer.py
+python normie.pyz
 ```
+
+From a clone of this repo, run `python -m normie` instead.
 
 ## Usage
 
@@ -82,8 +84,8 @@ python discord_normalizer.py
  Discord ◄──SET_USER_VOICE_SETTINGS─────┘  (that friend's volume slider)
 ```
 
-Normie logs in with the Discord application whose ID is in `CLIENT_ID`, at the top of
-the script, or with your own app if you set one up. Either way it's a **Public Client**,
+Normie logs in with the Discord application whose ID is in `CLIENT_ID`, in
+[`normie/config.py`](normie/config.py), or with your own app if you set one up. Either way it's a **Public Client**,
 so authorization uses PKCE: every login creates a one-time random code instead of an app
 password, and there is no client secret.
 
@@ -123,7 +125,7 @@ app. Until then:
 
   **Go back to Normie's shared app**, in the same window, undoes it.
 
-If you publish your own fork, replace `CLIENT_ID` at the top of the script.
+If you publish your own fork, replace `CLIENT_ID` in [`normie/config.py`](normie/config.py).
 
 ## Limitations
 
@@ -141,7 +143,8 @@ If you publish your own fork, replace `CLIENT_ID` at the top of the script.
 
 ## Configuration file
 
-`discord_normalizer_config.json` (created next to the script or the `.exe`) stores your
+`discord_normalizer_config.json` (created next to `normie.exe` or `normie.pyz`, or in the
+repo's root folder when you run `python -m normie`) stores your
 settings and your Discord **access token** in plain text. Don't share it; it's already in
 `.gitignore`.
 
@@ -160,8 +163,24 @@ exactly what Normie does to your call.
 | [`assets/normie-banner.png`](assets/normie-banner.png) | 680×240 banner for Discord; keeps the bottom-left free for the avatar. |
 | [`assets/normie-social.png`](assets/normie-social.png) | 1280×640 social share image: GitHub's social preview (*Settings → General → Social preview*) and link cards elsewhere. |
 
-The logo's geometry lives in `LOGO`, at the top of the script's GUI section — the window,
-tray and `.exe` icons are drawn from it.
+The logo's geometry lives in `LOGO`, in [`normie/gui/theme.py`](normie/gui/theme.py) — the
+window, tray and `.exe` icons are drawn from it.
+
+## Project layout
+
+```text
+normie/
+  __main__.py     startup — python -m normie, normie.pyz and normie.exe all begin here
+  __init__.py     APP_NAME and APP_VERSION (the release workflow stamps the version)
+  config.py       CLIENT_ID, default settings, loading and saving the config file
+  levels.py       dB math and compute_new_volume(), the volume-correction rule
+  engine.py       who is in the call and who is speaking; decides each adjustment
+  rpc.py          client for the Discord app's local RPC (IPC pipe)
+  oauth.py        PKCE login and Application ID checks
+  capture.py      WASAPI loopback level meter
+  controller.py   wires RPC, engine and capture together
+  gui/            the window (app.py), widgets, theme and logo, tray, own-app dialog
+```
 
 ## Releasing a version
 
@@ -169,9 +188,11 @@ Go to **Actions → Release → Run workflow** and enter the version (e.g. `1.0.
 Windows runner, the workflow:
 
 1. validates the version and checks that the tag `v1.0.0` doesn't exist yet;
-2. writes the version into the script (`APP_VERSION`) and checks that it imports;
-3. builds the icon and `normie.exe` with PyInstaller (`--onefile --windowed`);
-4. creates the `v1.0.0` release with `normie.exe`, `normie.py`, `requirements.txt` and
+2. writes the version into `normie/__init__.py` (`APP_VERSION`) and checks that every
+   module imports;
+3. builds the icon, `normie.exe` with PyInstaller (`--onefile --windowed`) and
+   `normie.pyz` with Python's `zipapp`;
+4. creates the `v1.0.0` release with `normie.exe`, `normie.pyz`, `requirements.txt` and
    `SHA256SUMS.txt`, with notes generated from the commits.
 
 ## Legal

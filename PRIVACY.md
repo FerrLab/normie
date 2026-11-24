@@ -66,7 +66,8 @@ The Discord app itself talks to Discord's servers as usual; that traffic is gove
 ## Data stored on your computer
 
 Normie keeps one file, `discord_normalizer_config.json`, in the same folder as
-`normie.exe` or `discord_normalizer.py`. It contains your Discord tokens, their expiry
+`normie.exe` or `normie.pyz` (or in the project folder when run from its source code).
+It contains your Discord tokens, their expiry
 time, your settings and the user IDs of locked people. It is stored as plain text:
 **treat it like a password and do not share it.**
 
@@ -81,8 +82,7 @@ Discord described above, no data leaves your computer.
 - **Delete your data:** delete `discord_normalizer_config.json`.
 - **Revoke access:** in Discord, open *User Settings → Authorized Apps* and deauthorize
   Normie.
-- **Uninstall:** delete `normie.exe` (or `discord_normalizer.py`) and the configuration
-  file.
+- **Uninstall:** delete `normie.exe` (or `normie.pyz`) and the configuration file.
 
 ## Children
 
