@@ -105,7 +105,9 @@ MAX_STEP_DB = 6.0         # largest correction applied in a single window
 CHANGE_FLASH_S = 4.0      # how long the ▲/▼ arrow stays visible after an adjustment
 AUDIO_RETRY_S = 5.0       # wait between attempts to open the audio loopback
 SILENCE_DB = -120.0
+AUTO_DEVICE_LABEL = "Same as Discord (automatic)"
 DEFAULT_DEVICE_LABEL = "Windows default output"
+LOOPBACK_SUFFIX = " [Loopback]"
 
 DEFAULT_CONFIG: dict = {
     "access_token": "",
@@ -119,7 +121,8 @@ DEFAULT_CONFIG: dict = {
     "max_volume": 200,
     "window_s": 2.0,           # seconds of "solo" speech per measurement
     "gate_db": -55.0,          # blocks below this are pauses, not speech
-    "device": "",              # loopback device name ("" = default)
+    "device_mode": "discord",  # "discord" = capture the device Discord plays on; "manual"
+    "device": "",              # manual choice: loopback device name ("" = Windows default)
     "locked": [],              # user_ids that must not be adjusted
     "minimize_to_tray": True,  # minimizing hides the window in the tray
 }
@@ -143,6 +146,9 @@ def load_config() -> dict:
     saved.pop("redirect_uri", None)
     if old_client and old_client != CLIENT_ID:
         saved.update(access_token="", refresh_token="", expires_at=0)
+    # Before "device_mode" existed, a non-empty "device" meant someone picked it by hand.
+    if "device_mode" not in saved and saved.get("device"):
+        saved["device_mode"] = "manual"
     cfg.update({k: v for k, v in saved.items() if k in DEFAULT_CONFIG})
     return cfg
 
@@ -618,6 +624,39 @@ def oauth_token(**fields) -> dict:
 
 # ───────────────────────────── Audio capture ────────────────────────────────
 
+def discord_output_name(device_id: str | None, devices: list[dict]) -> str:
+    """Name of the output device Discord plays on ("" when unknown).
+
+    When Discord is set to "Default", that entry is named like
+    "Default (Headphones (Elgato Wave:3))". That device is Discord's own idea of the
+    default and may differ from the Windows default PortAudio reports, so the real device
+    is read from inside the outer parentheses (this works in any Discord language)."""
+    name = next((d.get("name") or "" for d in devices if d.get("id") == device_id), "")
+    if device_id == "default":
+        name = name[name.index("(") + 1:-1] if "(" in name and name.endswith(")") else ""
+    return name.strip()
+
+
+def _norm_device(name: str) -> str:
+    return " ".join(name.removesuffix(LOOPBACK_SUFFIX).split()).casefold()
+
+
+def match_loopback(output_name: str, loopback_names: list[str]) -> str | None:
+    """The loopback device that captures `output_name` (a Discord output device name),
+    or None. WASAPI loopback devices are named "<output device> [Loopback]"."""
+    want = _norm_device(output_name)
+    if not want:
+        return None
+    for name in loopback_names:
+        if _norm_device(name) == want:
+            return name
+    for name in loopback_names:  # some APIs shorten long device names
+        have = _norm_device(name)
+        if have and (want.startswith(have) or have.startswith(want)):
+            return name
+    return None
+
+
 class LoopbackMeter:
     """Captures, via WASAPI loopback, whatever plays on an output device.
 
@@ -742,18 +781,22 @@ class Controller:
     """Wires RPC, engine and audio together. Commands to Discord run on a serial worker
     thread, so they never block the GUI or the RPC I/O thread.
 
-    set_status(text, kind) — kind is "off", "busy", "ok" or "error"."""
+    set_status(text, kind) — kind is "off", "busy", "ok" or "error".
+    on_output_device(name) — Discord switched to another output device ("" = unknown)."""
 
     RETRY_SECONDS = 10
 
-    def __init__(self, cfg: dict, log, set_status):
+    def __init__(self, cfg: dict, log, set_status, on_output_device=None):
         self.cfg = cfg
         self.log = log
         self._set_status = set_status
+        self._on_output_device = on_output_device or (lambda _name: None)
         self.engine = Engine(cfg, self._queue_volume, log)
         self.meter = LoopbackMeter(self.engine.feed, log)
         self.rpc: DiscordRPC | None = None
         self._channel_id: str | None = None
+        self.discord_output: str | None = None  # output device Discord plays on (None = not known yet)
+        self._output_devices: list[dict] = []
         self.user_name = ""
         self._want_connected = False
         self._retry_timer: threading.Timer | None = None
@@ -795,6 +838,7 @@ class Controller:
             self._authenticate(rpc)
             self.rpc = rpc
             rpc.request("SUBSCRIBE", evt="VOICE_CHANNEL_SELECT")
+            self._follow_output_device(rpc)
             self._load_selected_channel()
         except (ConnectionError, TimeoutError, OSError) as exc:
             rpc.close()
@@ -876,6 +920,29 @@ class Controller:
         self.cfg["expires_at"] = time.time() + float(tok.get("expires_in", 0))
         save_config(self.cfg)
 
+    # ── Discord's output device ──
+    def _follow_output_device(self, rpc: DiscordRPC) -> None:
+        """Read which device Discord plays on and get told whenever it changes."""
+        self.discord_output = None
+        try:
+            rpc.request("SUBSCRIBE", evt="VOICE_SETTINGS_UPDATE")
+            self._apply_voice_settings(rpc.request("GET_VOICE_SETTINGS"))
+        except RPCError as exc:
+            self.log(f"Couldn't read Discord's output device ({exc}); using the Windows default")
+            self.discord_output = ""
+            self._on_output_device("")
+
+    def _apply_voice_settings(self, settings: dict | None) -> None:
+        out = (settings or {}).get("output")
+        if not isinstance(out, dict) or "device_id" not in out:
+            return  # partial update without the output device: nothing to follow
+        if out.get("available_devices"):
+            self._output_devices = out["available_devices"]
+        name = discord_output_name(out["device_id"], self._output_devices)
+        if name != self.discord_output:
+            self.discord_output = name
+            self._on_output_device(name)
+
     # ── voice channel ──
     def _load_selected_channel(self) -> None:
         rpc = self.rpc
@@ -906,6 +973,8 @@ class Controller:
         # Runs on the RPC I/O thread: only update state here, never call request().
         if evt == "VOICE_CHANNEL_SELECT":
             self._submit(self._load_selected_channel)
+        elif evt == "VOICE_SETTINGS_UPDATE":
+            self._apply_voice_settings(data)
         elif evt in ("SPEAKING_START", "SPEAKING_STOP"):
             self.engine.set_speaking(data.get("user_id"), evt == "SPEAKING_START")
         elif evt in ("VOICE_STATE_CREATE", "VOICE_STATE_UPDATE"):
@@ -1384,20 +1453,24 @@ class App(tk.Tk):
         self._empty_shown = False
         self._closing = False
         self._meter_generation = 0
+        self._meter_device: str | None = None     # loopback device last asked for
+        self._discord_output: str | None = None   # device Discord plays on (None = unknown)
         self.shutdown_thread: threading.Thread | None = None
-        self.ui_calls: queue.Queue = queue.Queue()  # functions coming from other threads (tray)
-        self.ctrl = Controller(self.cfg, self.log, self.set_status)
+        self.ui_calls: queue.Queue = queue.Queue()  # functions coming from other threads (tray, RPC)
+        self.ctrl = Controller(self.cfg, self.log, self.set_status,
+                               on_output_device=lambda name: self.ui_calls.put(
+                                   lambda: self._discord_output_changed(name)))
         self._init_style()
         self._build()
         self._set_window_icon()
         self._dark_titlebar()
-        self._start_meter()
+        if self.cfg["refresh_token"]:
+            self.ctrl.connect()  # authorized before: connect right away
+        self._start_meter()  # after connect(): in automatic mode it waits for Discord's device
         self.tray = Tray(self)
         self.bind("<Unmap>", self._on_unmap)
         self.protocol("WM_DELETE_WINDOW", self.quit_app)
         self.after(150, self._tick)
-        if self.cfg["refresh_token"]:
-            self.ctrl.connect()  # authorized before: connect right away
 
     def px(self, n: float) -> int:
         """Convert design pixels (100% scaling) to the monitor's real scale."""
@@ -1579,14 +1652,20 @@ class App(tk.Tk):
             self._label(box, "%   to   " if i == 0 else "%", muted=True).pack(side="left")
 
         self._label(body, "Monitored output").grid(row=2, column=0, sticky="w")
-        self.var_device = tk.StringVar(value=self.cfg["device"] or DEFAULT_DEVICE_LABEL)
+        if self.cfg["device_mode"] == "discord":
+            current = AUTO_DEVICE_LABEL
+        else:
+            current = self.cfg["device"] or DEFAULT_DEVICE_LABEL
+        self.var_device = tk.StringVar(value=current)
         combo = ttk.Combobox(body, textvariable=self.var_device, state="readonly",
-                             values=[DEFAULT_DEVICE_LABEL, *self.ctrl.meter.loopback_devices()])
+                             values=[AUTO_DEVICE_LABEL, DEFAULT_DEVICE_LABEL, *self.ctrl.meter.loopback_devices()])
         combo.grid(row=2, column=1, columnspan=2, sticky="we", padx=(px(14), 0))
         combo.bind("<<ComboboxSelected>>", lambda _e: self._device_changed())
+        self.lbl_device_note = self._label(body, muted=True, font=self.f_small, anchor="w")
+        self.lbl_device_note.grid(row=3, column=1, columnspan=2, sticky="w", padx=(px(14), 0), pady=(px(4), 0))
 
         tray_row = tk.Frame(body, bg=Theme.CARD)
-        tray_row.grid(row=3, column=0, columnspan=3, sticky="w", pady=(px(14), 0))
+        tray_row.grid(row=4, column=0, columnspan=3, sticky="w", pady=(px(14), 0))
         self.var_tray = tk.BooleanVar(value=self.cfg["minimize_to_tray"])
         Toggle(tray_row, self.var_tray, self._settings_changed, px, Theme.CARD).pack(side="left")
         self._label(tray_row, "Minimizing hides Normie in the tray (icon near the clock)").pack(
@@ -1594,7 +1673,7 @@ class App(tk.Tk):
 
         self._label(body, "Tip: put Discord on one output and games/music on another — the "
                           "measurements get cleaner.", muted=True, font=self.f_small).grid(
-            row=4, column=0, columnspan=3, sticky="w", pady=(px(12), 0))
+            row=5, column=0, columnspan=3, sticky="w", pady=(px(12), 0))
 
     # ── actions ──
     def _toggle_connect(self) -> None:
@@ -1661,12 +1740,44 @@ class App(tk.Tk):
             self.after_cancel(self._save_job)
         self._save_job = self.after(800, lambda: save_config(self.cfg))
 
+    def _wanted_device(self) -> str | None:
+        """Loopback device to capture ("" = Windows default, None = wait for Discord)."""
+        if self.cfg["device_mode"] != "discord":
+            return self.cfg["device"]
+        if self._discord_output is None:
+            # Still connecting: wait to learn Discord's device instead of opening a wrong one.
+            return None if self.ctrl.active else ""
+        if not self._discord_output:  # Discord couldn't tell us: Windows default
+            return ""
+        match = match_loopback(self._discord_output, self.ctrl.meter.loopback_devices())
+        if match is None:
+            self.log(f"No loopback device matches Discord's output “{self._discord_output}”; "
+                     "using the Windows default.")
+            return ""
+        return match
+
+    def _discord_output_changed(self, name: str) -> None:
+        self._discord_output = name
+        if name and self.cfg["device_mode"] == "discord":
+            self.log(f"Discord plays on “{name}” — capturing that device")
+        self._start_meter()
+
     def _start_meter(self) -> None:
         # The device may be missing or busy (unplugged, exclusive mode…): keep retrying off
         # the GUI thread. A newer call (e.g. a different device was picked) makes older
         # retry loops give up.
+        device = self._wanted_device()
+        auto = self.cfg["device_mode"] == "discord"
+        if device is None:
+            self.lbl_device_note.configure(text="Waiting for Discord to say which device it uses…")
+            return
+        shown = device.removesuffix(LOOPBACK_SUFFIX) if device else DEFAULT_DEVICE_LABEL
+        self.lbl_device_note.configure(text=f"Following Discord → {shown}" if auto else "")
+        if device == self._meter_device:
+            return  # already capturing (or trying to capture) this device
+        self._meter_device = device
         self._meter_generation += 1
-        generation, device = self._meter_generation, self.cfg["device"]
+        generation = self._meter_generation
 
         def run():
             failures = 0
@@ -1685,7 +1796,11 @@ class App(tk.Tk):
 
     def _device_changed(self) -> None:
         value = self.var_device.get()
-        self.cfg["device"] = "" if value == DEFAULT_DEVICE_LABEL else value
+        if value == AUTO_DEVICE_LABEL:
+            self.cfg["device_mode"] = "discord"
+        else:
+            self.cfg["device_mode"] = "manual"
+            self.cfg["device"] = "" if value == DEFAULT_DEVICE_LABEL else value
         self._schedule_save()
         self._start_meter()
 

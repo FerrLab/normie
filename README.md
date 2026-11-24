@@ -58,13 +58,16 @@ python discord_normalizer.py
 | Target level | Where everyone gets pulled to. Set it by ear. |
 | Advanced settings → Speed | How much of the error is corrected per ~2 s of speech. |
 | Advanced settings → Allowed volume | Limits for the volume (Discord accepts 0–200%). |
-| Advanced settings → Monitored output | The device Discord plays on (headset/speakers). |
+| Advanced settings → Monitored output | **Same as Discord (automatic)** by default: captures the device Discord plays on and follows it when you change it in Discord. You can also pick a device by hand. |
 | Advanced settings → Minimizing hides Normie in the tray | Turn off to minimize normally. |
 | Activity | History of adjustments and errors. |
 
 ## How it works
 
 ```
+ Discord (local RPC) ──GET_VOICE_SETTINGS──► which output device is Discord using?
+                                        │  capture that same device (and follow changes)
+                                        ▼
  your sound card ──loopback──►  measures the level (dBFS) every 100 ms
                                         │
  Discord (local RPC) ──SPEAKING_START──► who is talking right now?
@@ -108,9 +111,9 @@ Full details in the [Privacy Policy](PRIVACY.md).
 ## Limitations
 
 - **Other sounds on the same output skew the measurement.** Normie measures everything
-  that plays on the selected device, so loud games or music mixed with voices distort the
-  reading. If you can, put Discord on one output and games on another (Discord → Settings
-  → Voice & Video → Output Device) and pick Discord's device in *Monitored output*.
+  that plays on Discord's output device, so loud games or music mixed with voices distort
+  the reading. If you can, give Discord its own output (Discord → Settings → Voice & Video
+  → Output Device); Normie follows it automatically.
 - **It only measures when one person speaks alone.** When people talk over each other,
   nothing is measured and volumes stay where they are.
 - **200% is Discord's ceiling (about +6 dB).** Someone with a very quiet mic may not

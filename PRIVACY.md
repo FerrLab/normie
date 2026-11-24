@@ -17,7 +17,8 @@ uses the internet is to exchange or refresh your Discord login token with Discor
 | Your Discord user ID and username | Your Discord app, through its local RPC connection | Shows "Connected as …" and excludes your own voice from measurements | No |
 | The voice channel you are in: its name and the people in it (user IDs, usernames or nicknames, the volume and mute state *you* set for them) | Your Discord app | Shows the list of people and adjusts their volume on your side | Only the user IDs of people you choose to lock |
 | Who is speaking right now | Speaking events from your Discord app | Decides whose voice is being measured | No |
-| Audio playing on the output device you select | Windows audio loopback (WASAPI) | Every 100 ms the sound is reduced to a single loudness number. **The audio itself is never recorded, saved or sent anywhere.** | No |
+| Discord's audio output setting: the device it plays on and the names of your audio devices | Your Discord app | Captures the same device Discord plays on, and follows it when you change it | Only the name of a device you pick by hand |
+| Audio playing on Discord's output device (or the one you select) | Windows audio loopback (WASAPI) | Every 100 ms the sound is reduced to a single loudness number. **The audio itself is never recorded, saved or sent anywhere.** | No |
 | Discord login tokens (access token and refresh token) | Discord, after you authorize Normie | Lets Normie reconnect without asking for authorization every time | Yes, in the configuration file |
 | Your settings (target level, speed, limits, device, tray option) | You | Applies your preferences | Yes, in the configuration file |
 
@@ -30,7 +31,8 @@ When you click **Connect** for the first time, Discord asks you to authorize Nor
 these scopes:
 
 - `rpc` — connect to the Discord app running on your computer;
-- `rpc.voice.read` — see the voice channel you are in, who is in it and who is speaking;
+- `rpc.voice.read` — see the voice channel you are in, who is in it, who is speaking and
+  which audio output device Discord uses;
 - `rpc.voice.write` — change the per-user volume on your side (the same control as
   *right-click a user → User Volume*).
 
