@@ -16,8 +16,8 @@ How it works
 3. When exactly ONE friend is speaking, the measured level is theirs.
 4. After each window of speech, compute_new_volume() picks their new volume.
 
-Login: the Discord app (CLIENT_ID below) is a "Public Client", so authorization
-uses PKCE — there is no client secret.
+Login: the Discord app (CLIENT_ID below, or the user's own app set up in Advanced
+settings) is a "Public Client", so authorization uses PKCE — there is no client secret.
 
 Requirements: Windows 10/11, Python 3.10+
     pip install -r requirements.txt
@@ -32,6 +32,7 @@ import json
 import math
 import os
 import queue
+import re
 import secrets
 import struct
 import sys
@@ -42,6 +43,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+import webbrowser
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
@@ -81,8 +83,11 @@ APP_VERSION = "dev"  # the release workflow replaces this with the published ver
 
 # Public ID of the app in the Discord Developer Portal — not a secret. The app must
 # have "Public Client" enabled and REDIRECT_URI listed under OAuth2 → Redirects.
+# Until Discord approves it for RPC, this shared app only works for accounts on its
+# App Testers list; anyone else can set up their own app (Advanced settings → Discord app).
 CLIENT_ID = "1574641998332166236"
 REDIRECT_URI = "http://localhost"
+DEV_PORTAL_URL = "https://discord.com/developers/applications"
 
 
 def _app_dir() -> Path:
@@ -113,6 +118,8 @@ DEFAULT_CONFIG: dict = {
     "access_token": "",
     "refresh_token": "",
     "expires_at": 0,
+    "token_client_id": "",     # the Discord app the saved tokens were issued to
+    "own_client_id": "",       # the user's own Discord app ("" = Normie's shared app)
     "enabled": True,
     "target_db": -24,          # target RMS speech level, in dBFS
     "speed": 0.5,              # fraction of the error corrected per window (0..1)
@@ -128,6 +135,18 @@ DEFAULT_CONFIG: dict = {
 }
 
 _config_lock = threading.Lock()
+
+
+def app_client_id(cfg: dict) -> str:
+    """The Discord app Normie logs in with: the user's own, if they set one up."""
+    return cfg.get("own_client_id") or CLIENT_ID
+
+
+def parse_client_id(text: str) -> str | None:
+    """Find an Application ID (a 17–20 digit snowflake) in whatever was pasted: the bare
+    ID or the Developer Portal's address, which contains it."""
+    match = re.search(r"(?<!\d)\d{17,20}(?!\d)", text or "")
+    return match.group(0) if match else None
 
 
 def load_config() -> dict:
@@ -146,10 +165,15 @@ def load_config() -> dict:
     saved.pop("redirect_uri", None)
     if old_client and old_client != CLIENT_ID:
         saved.update(access_token="", refresh_token="", expires_at=0)
+    # Tokens saved before own apps existed were issued to the shared app.
+    if saved.get("refresh_token") or saved.get("access_token"):
+        saved.setdefault("token_client_id", CLIENT_ID)
     # Before "device_mode" existed, a non-empty "device" meant someone picked it by hand.
     if "device_mode" not in saved and saved.get("device"):
         saved["device_mode"] = "manual"
     cfg.update({k: v for k, v in saved.items() if k in DEFAULT_CONFIG})
+    if cfg["token_client_id"] and cfg["token_client_id"] != app_client_id(cfg):
+        cfg.update(access_token="", refresh_token="", expires_at=0, token_client_id="")
     return cfg
 
 
@@ -601,11 +625,11 @@ def make_pkce_pair() -> tuple[str, str]:
     return verifier, pkce_challenge(verifier)
 
 
-def oauth_token(**fields) -> dict:
+def oauth_token(*, client_id: str = CLIENT_ID, **fields) -> dict:
     """Exchange a code (or refresh_token) for an access_token with Discord's API.
     The app is a "Public Client": there is no client_secret; the code exchange carries
     the code_verifier instead."""
-    body = urllib.parse.urlencode({"client_id": CLIENT_ID, **fields}).encode()
+    body = urllib.parse.urlencode({"client_id": client_id, **fields}).encode()
     req = urllib.request.Request(OAUTH_TOKEN_URL, data=body, method="POST", headers={
         "Content-Type": "application/x-www-form-urlencoded",
         # urllib's default User-Agent is blocked by Discord's Cloudflare (error 1010).
@@ -619,7 +643,48 @@ def oauth_token(**fields) -> dict:
         hint = ""
         if "invalid_client" in detail or "unauthorized_client" in detail:
             hint = " — check that “Public Client” is enabled under OAuth2 in the Developer Portal"
+        elif "redirect_uri" in detail:
+            hint = f" — add {REDIRECT_URI} under OAuth2 → Redirects in the Developer Portal"
         raise RuntimeError(f"OAuth failed (HTTP {exc.code}): {detail}{hint}") from None
+
+
+def auth_error_hint(exc: BaseException, own_app: bool = False) -> str:
+    """What the user can do about a refused authorization ('' when there's nothing to add).
+
+    Discord answers "invalid_scope" when the account clicking Authorize may not grant the
+    rpc scopes: until Discord approves an app for RPC, only accounts on its App Testers list
+    may. The app's owner is allowed implicitly, but once the app belongs to a team, even the
+    team's members have to be added as testers."""
+    if not (isinstance(exc, RPCError) and "invalid_scope" in str(exc)):
+        return ""
+    if own_app:
+        return ("Discord refused the voice permissions for your own app. It must belong to your "
+                "personal account, not a team: apps owned by a team only work for accounts on "
+                "their App Testers list.")
+    return ("Discord refused the voice permissions for this account. Until Discord approves "
+            "Normie, its shared app only works for accounts on its App Testers list. Use your "
+            "own Discord app instead (Advanced settings → Discord app, about 2 minutes), or ask "
+            "Normie's developer to add you as an App Tester.")
+
+
+def check_client_id(client_id: str) -> str:
+    """Ask the local Discord app whether this Discord app exists ('' = it does, otherwise
+    what went wrong). Only the IPC handshake is sent: no login, nothing leaves the PC."""
+    rpc = DiscordRPC(client_id, lambda *_: None, lambda *_: None)
+    try:
+        rpc.connect(timeout=10)
+    except RPCError as exc:
+        if exc.code == 4000:  # "Invalid Client ID"
+            return ("Discord doesn't know this Application ID. Copy it again from your app's "
+                    "General Information page.")
+        return str(exc)
+    except ConnectionError:
+        return "Open the Discord desktop app first, then try again."
+    except (TimeoutError, OSError) as exc:
+        return f"Discord didn't answer ({exc}). Try again in a few seconds."
+    finally:
+        rpc.close()
+    return ""
 
 
 # ───────────────────────────── Audio capture ────────────────────────────────
@@ -782,15 +847,19 @@ class Controller:
     thread, so they never block the GUI or the RPC I/O thread.
 
     set_status(text, kind) — kind is "off", "busy", "ok" or "error".
-    on_output_device(name) — Discord switched to another output device ("" = unknown)."""
+    on_output_device(name) — Discord switched to another output device ("" = unknown).
+    on_access_refused(own_app) — Discord refused the rpc permissions for this account."""
 
     RETRY_SECONDS = 10
 
-    def __init__(self, cfg: dict, log, set_status, on_output_device=None):
+    def __init__(self, cfg: dict, log, set_status, on_output_device=None, on_access_refused=None):
         self.cfg = cfg
         self.log = log
         self._set_status = set_status
         self._on_output_device = on_output_device or (lambda _name: None)
+        self._on_access_refused = on_access_refused or (lambda _own_app: None)
+        self._connecting: DiscordRPC | None = None  # connection still logging in
+        self._generation = 0                         # bumped by use_app() to cancel a login
         self.engine = Engine(cfg, self._queue_volume, log)
         self.meter = LoopbackMeter(self.engine.feed, log)
         self.rpc: DiscordRPC | None = None
@@ -805,6 +874,26 @@ class Controller:
     @property
     def active(self) -> bool:
         return self._want_connected or self.rpc is not None
+
+    @property
+    def client_id(self) -> str:
+        return app_client_id(self.cfg)
+
+    def use_app(self, own_client_id: str) -> None:
+        """Log in with another Discord app from now on ("" = Normie's shared app). Tokens
+        belong to the app that issued them, so this starts a fresh authorization."""
+        self.cfg.update(own_client_id=own_client_id, access_token="", refresh_token="",
+                        expires_at=0, token_client_id="")
+        save_config(self.cfg)
+        self._want_connected = True
+        if self._retry_timer:
+            self._retry_timer.cancel()
+        self._generation += 1
+        pending = self._connecting
+        if pending is not None:
+            pending.close()  # an AUTHORIZE popup may be waiting for minutes: don't wait for it
+        self._submit(self._disconnect)
+        self._submit(self._connect)
 
     def _submit(self, fn, *args) -> None:
         def run():
@@ -832,7 +921,8 @@ class Controller:
         if self.rpc is not None or not self._want_connected:
             return
         self._set_status("Connecting to Discord…", "busy")
-        rpc = DiscordRPC(CLIENT_ID, self._on_event, self._on_rpc_closed)
+        generation = self._generation
+        rpc = self._connecting = DiscordRPC(self.client_id, self._on_event, self._on_rpc_closed)
         try:
             rpc.connect()
             self._authenticate(rpc)
@@ -840,18 +930,27 @@ class Controller:
             rpc.request("SUBSCRIBE", evt="VOICE_CHANNEL_SELECT")
             self._follow_output_device(rpc)
             self._load_selected_channel()
-        except (ConnectionError, TimeoutError, OSError) as exc:
-            rpc.close()
-            self.rpc = None
-            self.log(f"Discord unavailable: {exc}")
-            if self._want_connected:
-                self._schedule_retry()
         except Exception as exc:
             rpc.close()
             self.rpc = None
+            if generation != self._generation:
+                return  # use_app() cut this login short to switch apps; it reconnects itself
+            if isinstance(exc, (ConnectionError, TimeoutError, OSError)):
+                self.log(f"Discord unavailable: {exc}")
+                if self._want_connected:
+                    self._schedule_retry()
+                return
             self._want_connected = False
             self.log(f"Couldn't connect: {exc}")
-            self._set_status("Connection failed — see Activity", "error")
+            own_app = bool(self.cfg["own_client_id"])
+            hint = auth_error_hint(exc, own_app)
+            if hint:
+                self.log(hint)
+                self._on_access_refused(own_app)
+            self._set_status("Discord refused access — see Activity" if hint
+                             else "Connection failed — see Activity", "error")
+        finally:
+            self._connecting = None
 
     def _disconnect(self) -> None:
         rpc, self.rpc = self.rpc, None
@@ -881,7 +980,10 @@ class Controller:
 
     # ── OAuth2 authentication with PKCE ──
     def _authenticate(self, rpc: DiscordRPC) -> None:
-        cfg = self.cfg
+        cfg, client_id = self.cfg, rpc.client_id
+        issued_to = cfg["token_client_id"] or CLIENT_ID  # untagged: saved before own apps existed
+        if issued_to != client_id:  # tokens from another app are useless here
+            cfg.update(access_token="", refresh_token="", expires_at=0)
         if cfg["access_token"] and cfg["expires_at"] > time.time() + 60:
             try:
                 return self._auth_with(rpc, cfg["access_token"])
@@ -889,20 +991,21 @@ class Controller:
                 self.log(f"Saved token rejected ({exc}); refreshing…")
         if cfg["refresh_token"]:
             try:
-                tok = oauth_token(grant_type="refresh_token", refresh_token=cfg["refresh_token"])
-                self._store_token(tok)
+                tok = oauth_token(client_id=client_id, grant_type="refresh_token",
+                                  refresh_token=cfg["refresh_token"])
+                self._store_token(tok, client_id)
                 return self._auth_with(rpc, tok["access_token"])
             except (RPCError, RuntimeError, urllib.error.URLError) as exc:
                 self.log(f"Couldn't refresh the token ({exc}); asking for authorization again…")
         self._set_status("Approve the request in the Discord window…", "busy")
         verifier, challenge = make_pkce_pair()
         data = rpc.request("AUTHORIZE", {
-            "client_id": CLIENT_ID, "scopes": SCOPES,
+            "client_id": client_id, "scopes": SCOPES,
             "code_challenge": challenge, "code_challenge_method": "S256",
         }, timeout=300)
-        tok = oauth_token(grant_type="authorization_code", code=data["code"],
+        tok = oauth_token(client_id=client_id, grant_type="authorization_code", code=data["code"],
                           redirect_uri=REDIRECT_URI, code_verifier=verifier)
-        self._store_token(tok)
+        self._store_token(tok, client_id)
         self._auth_with(rpc, tok["access_token"])
 
     def _auth_with(self, rpc: DiscordRPC, token: str) -> None:
@@ -914,10 +1017,13 @@ class Controller:
         if missing:
             self.log(f"Warning: the token is missing the scopes {sorted(missing)}")
 
-    def _store_token(self, tok: dict) -> None:
+    def _store_token(self, tok: dict, client_id: str) -> None:
+        if client_id != self.client_id:
+            return  # the user switched apps while this login was finishing
         self.cfg["access_token"] = tok["access_token"]
         self.cfg["refresh_token"] = tok.get("refresh_token", "")
         self.cfg["expires_at"] = time.time() + float(tok.get("expires_in", 0))
+        self.cfg["token_client_id"] = client_id
         save_config(self.cfg)
 
     # ── Discord's output device ──
@@ -1088,6 +1194,29 @@ BUTTON_COLORS = {  # kind: (background, hover background, text)
     "accent": (Theme.ACCENT, Theme.ACCENT_HOVER, "#ffffff"),
     "ghost": (Theme.INPUT, Theme.BORDER, Theme.TEXT),
 }
+
+
+def use_dark_titlebar(window: tk.Misc) -> None:
+    """Dark title bar on Windows 10/11 (DWMWA_USE_IMMERSIVE_DARK_MODE)."""
+    try:
+        window.update_idletasks()
+        hwnd = ctypes.windll.user32.GetParent(window.winfo_id())
+        on = ctypes.c_int(1)
+        for attr in (20, 19):  # 20 since Windows 10 20H1; 19 before that
+            if ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, attr, ctypes.byref(on),
+                                                          ctypes.sizeof(on)) == 0:
+                break
+    except Exception:
+        pass
+
+
+def bring_to_front(window: tk.Misc) -> None:
+    """Raise a window above other programs' windows. Windows won't let a background app
+    take focus, but a window that is topmost for a moment still ends up on top."""
+    window.lift()
+    window.attributes("-topmost", True)
+    window.after(100, lambda: window.winfo_exists() and window.attributes("-topmost", False))
+    window.focus_force()
 
 
 def _ellipsize(text: str, limit: int) -> str:
@@ -1435,6 +1564,149 @@ class Tray:
                 pass
 
 
+class OwnAppDialog(tk.Toplevel):
+    """Walks the user through creating their own Discord app and saves its Application ID.
+
+    Until Discord approves Normie for RPC, its shared app only works for accounts on its
+    App Testers list. An app's owner needs no list, so an app of one's own works at once."""
+
+    def __init__(self, app: App, reason: str = ""):
+        super().__init__(app, bg=Theme.BG)
+        self.app = app
+        self._checking = False
+        px = app.px
+        wrap = px(470)
+        self.title("Use your own Discord app")
+        self.resizable(False, False)
+        self.transient(app)
+        self.bind("<Escape>", lambda _e: self.destroy())
+
+        outer = tk.Frame(self, bg=Theme.BG, padx=px(24), pady=px(20))
+        outer.pack(fill="both", expand=True)
+        app._label(outer, "Use your own Discord app", font=app.f_big).pack(anchor="w")
+        if reason:
+            tk.Label(outer, text=reason, bg=Theme.BG, fg=Theme.YELLOW, font=app.f_body,
+                     wraplength=wrap + px(40), justify="left").pack(anchor="w", pady=(px(8), 0))
+        app._label(outer, "Until Discord approves Normie, its shared app only works for accounts on "
+                          "its tester list. An app of your own works for you right away. It's free "
+                          "and takes about 2 minutes.", muted=True,
+                   wraplength=wrap + px(40), justify="left").pack(anchor="w", pady=(px(6), px(14)))
+
+        step = self._step(outer, 1, "Create the app",
+                          "Open the Developer Portal, click New Application, name it (for example "
+                          "“Normie”) and create it. Leave Team on Personal: apps owned by a team "
+                          "need testers too.")
+        FlatButton(step, "Open Developer Portal", lambda: webbrowser.open(DEV_PORTAL_URL),
+                   "accent", app.f_body).pack(anchor="w", pady=(px(10), 0))
+
+        step = self._step(outer, 2, "Let Normie log in",
+                          "In your new app, open OAuth2. Under Redirects, add the address below. "
+                          "Turn on Public Client, then click Save Changes.")
+        row = tk.Frame(step, bg=Theme.CARD)
+        row.pack(anchor="w", pady=(px(10), 0))
+        redirect = tk.Entry(row, width=20, font=("Consolas", 10), relief="flat", bd=px(5),
+                            readonlybackground=Theme.INPUT, fg=Theme.TEXT, highlightthickness=0)
+        redirect.insert(0, REDIRECT_URI)
+        redirect.configure(state="readonly")
+        redirect.pack(side="left")
+        self.btn_copy = FlatButton(row, "Copy", self._copy_redirect, "ghost", app.f_body)
+        self.btn_copy.pack(side="left", padx=(px(8), 0))
+
+        step = self._step(outer, 3, "Paste the Application ID",
+                          "Open General Information, copy the Application ID and paste it here.")
+        row = tk.Frame(step, bg=Theme.CARD)
+        row.pack(fill="x", pady=(px(10), 0))
+        self.var_id = tk.StringVar(value=app.cfg["own_client_id"])
+        self.entry = tk.Entry(row, textvariable=self.var_id, font=app.f_body, relief="flat",
+                              bd=px(5), bg=Theme.INPUT, fg=Theme.TEXT, insertbackground=Theme.TEXT,
+                              highlightthickness=1, highlightbackground=Theme.INPUT,
+                              highlightcolor=Theme.ACCENT)
+        self.entry.pack(side="left", fill="x", expand=True)
+        self.entry.bind("<Return>", lambda _e: self._check())
+        self.var_id.trace_add("write", lambda *_: self._checking or self._say(""))  # stale error
+        FlatButton(row, "Check and use", self._check, "accent", app.f_body).pack(
+            side="left", padx=(px(8), 0))
+        self.lbl_status = tk.Label(step, bg=Theme.CARD, fg=Theme.MUTED, font=app.f_small,
+                                   wraplength=wrap, justify="left")
+        self.lbl_status.pack(anchor="w", pady=(px(8), 0))
+
+        bottom = tk.Frame(outer, bg=Theme.BG)
+        bottom.pack(fill="x", pady=(px(6), 0))
+        FlatButton(bottom, "Close", self.destroy, "ghost", app.f_body).pack(side="right")
+        if app.cfg["own_client_id"]:
+            FlatButton(bottom, "Go back to Normie's shared app", self._use_shared, "ghost",
+                       app.f_body).pack(side="left")
+
+        use_dark_titlebar(self)
+        self.update_idletasks()
+        x = app.winfo_rootx() + max(0, (app.winfo_width() - self.winfo_reqwidth()) // 2)
+        self.geometry(f"+{x}+{app.winfo_rooty() + px(30)}")
+        self.entry.focus_set()
+
+    def _step(self, parent, number: int, title: str, text: str) -> tk.Frame:
+        """A numbered card; returns the frame under its text for the step's controls."""
+        app, px = self.app, self.app.px
+        card = tk.Frame(parent, bg=Theme.CARD, padx=px(16), pady=px(14))
+        card.pack(fill="x", pady=(0, px(10)))
+        head = tk.Frame(card, bg=Theme.CARD)
+        head.pack(fill="x")
+        size = px(22)
+        badge = tk.Canvas(head, width=size, height=size, bg=Theme.CARD, highlightthickness=0)
+        badge.create_oval(1, 1, size - 1, size - 1, fill=Theme.ACCENT, outline="")
+        badge.create_text(size / 2, size / 2, text=str(number), fill="#ffffff", font=app.f_chip)
+        badge.pack(side="left")
+        app._label(head, title, font=app.f_bold).pack(side="left", padx=(px(10), 0))
+        body = tk.Frame(card, bg=Theme.CARD)
+        body.pack(fill="x", padx=(size + px(10), 0))  # lines up with the title
+        app._label(body, text, muted=True, wraplength=px(440), justify="left").pack(
+            anchor="w", pady=(px(4), 0))
+        return body
+
+    def _say(self, text: str, color: str = Theme.MUTED) -> None:
+        self.lbl_status.configure(text=text, fg=color)
+
+    def _copy_redirect(self) -> None:
+        self.clipboard_clear()
+        self.clipboard_append(REDIRECT_URI)
+        self.btn_copy.configure(text="Copied ✓")
+        self.after(1500, lambda: self.winfo_exists() and self.btn_copy.configure(text="Copy"))
+
+    def _check(self) -> None:
+        if self._checking:
+            return
+        client_id = parse_client_id(self.var_id.get())
+        if client_id is None:
+            self._say("That doesn't look like an Application ID: it's a long number "
+                      "(17 to 20 digits).", Theme.RED)
+            return
+        if client_id == CLIENT_ID:
+            self._say("That's Normie's shared app. Paste the ID of the app you created.", Theme.RED)
+            return
+        self.var_id.set(client_id)
+        self._checking = True
+        self._say("Checking with Discord…")
+
+        def run():  # the handshake can take a moment: keep it off the GUI thread
+            problem = check_client_id(client_id)
+            self.app.ui_calls.put(lambda: self._checked(client_id, problem))
+
+        threading.Thread(target=run, name="check-app", daemon=True).start()
+
+    def _checked(self, client_id: str, problem: str) -> None:
+        self._checking = False
+        if not self.winfo_exists():
+            return
+        if problem:
+            self._say(problem, Theme.RED)
+            return
+        self.app.use_own_app(client_id)
+        self.destroy()
+
+    def _use_shared(self) -> None:
+        self.app.use_own_app("")
+        self.destroy()
+
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -1456,10 +1728,13 @@ class App(tk.Tk):
         self._meter_device: str | None = None     # loopback device last asked for
         self._discord_output: str | None = None   # device Discord plays on (None = unknown)
         self.shutdown_thread: threading.Thread | None = None
+        self._setup_dialog: OwnAppDialog | None = None
         self.ui_calls: queue.Queue = queue.Queue()  # functions coming from other threads (tray, RPC)
         self.ctrl = Controller(self.cfg, self.log, self.set_status,
                                on_output_device=lambda name: self.ui_calls.put(
-                                   lambda: self._discord_output_changed(name)))
+                                   lambda: self._discord_output_changed(name)),
+                               on_access_refused=lambda own_app: self.ui_calls.put(
+                                   lambda: self._access_refused(own_app)))
         self._init_style()
         self._build()
         self._set_window_icon()
@@ -1524,17 +1799,7 @@ class App(tk.Tk):
             self.iconphoto(True, self._icon_photo)
 
     def _dark_titlebar(self) -> None:
-        """Dark title bar on Windows 10/11 (DWMWA_USE_IMMERSIVE_DARK_MODE)."""
-        try:
-            self.update_idletasks()
-            hwnd = ctypes.windll.user32.GetParent(self.winfo_id())
-            on = ctypes.c_int(1)
-            for attr in (20, 19):  # 20 since Windows 10 20H1; 19 before that
-                if ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, attr, ctypes.byref(on),
-                                                              ctypes.sizeof(on)) == 0:
-                    break
-        except Exception:
-            pass
+        use_dark_titlebar(self)
 
     def _label(self, parent, text="", muted=False, font=None, **kw) -> tk.Label:
         return tk.Label(parent, text=text, bg=parent["bg"], fg=Theme.MUTED if muted else Theme.TEXT,
@@ -1664,8 +1929,17 @@ class App(tk.Tk):
         self.lbl_device_note = self._label(body, muted=True, font=self.f_small, anchor="w")
         self.lbl_device_note.grid(row=3, column=1, columnspan=2, sticky="w", padx=(px(14), 0), pady=(px(4), 0))
 
+        self._label(body, "Discord app").grid(row=4, column=0, sticky="w", pady=(px(14), 0))
+        app_row = tk.Frame(body, bg=Theme.CARD)
+        app_row.grid(row=4, column=1, columnspan=2, sticky="we", padx=(px(14), 0), pady=(px(14), 0))
+        self.lbl_app = self._label(app_row, muted=True, anchor="w")
+        self.lbl_app.pack(side="left")
+        self.btn_app = FlatButton(app_row, "", self.open_app_setup, "ghost", self.f_body)
+        self.btn_app.pack(side="right")
+        self._show_app()
+
         tray_row = tk.Frame(body, bg=Theme.CARD)
-        tray_row.grid(row=4, column=0, columnspan=3, sticky="w", pady=(px(14), 0))
+        tray_row.grid(row=5, column=0, columnspan=3, sticky="w", pady=(px(14), 0))
         self.var_tray = tk.BooleanVar(value=self.cfg["minimize_to_tray"])
         Toggle(tray_row, self.var_tray, self._settings_changed, px, Theme.CARD).pack(side="left")
         self._label(tray_row, "Minimizing hides Normie in the tray (icon near the clock)").pack(
@@ -1673,7 +1947,7 @@ class App(tk.Tk):
 
         self._label(body, "Tip: put Discord on one output and games/music on another — the "
                           "measurements get cleaner.", muted=True, font=self.f_small).grid(
-            row=5, column=0, columnspan=3, sticky="w", pady=(px(12), 0))
+            row=6, column=0, columnspan=3, sticky="w", pady=(px(12), 0))
 
     # ── actions ──
     def _toggle_connect(self) -> None:
@@ -1685,6 +1959,44 @@ class App(tk.Tk):
     def toggle_lock(self, user_id: str) -> None:
         if self.ctrl.engine.toggle_lock(user_id) is not None:
             self._schedule_save()
+
+    # ── which Discord app to log in with ──
+    def _show_app(self) -> None:
+        own = self.cfg["own_client_id"]
+        self.lbl_app.configure(text=f"Your own app · {own}" if own
+                               else "Normie's shared app (testers only, for now)")
+        self.btn_app.configure(text="Change…" if own else "Use my own app…")
+
+    def open_app_setup(self, reason: str = "") -> None:
+        dialog = self._setup_dialog
+        if dialog is not None and dialog.winfo_exists():
+            dialog.destroy()  # reopen, so a new reason is shown
+        # After a refusal the user is still in Discord's popup, so Normie is usually behind it
+        if self.state() in ("withdrawn", "iconic"):
+            self.show_window()
+        else:
+            bring_to_front(self)
+        dialog = self._setup_dialog = OwnAppDialog(self, reason)
+        bring_to_front(dialog)
+        dialog.entry.focus_set()
+
+    def _access_refused(self, own_app: bool) -> None:
+        if own_app:
+            reason = ("Discord refused your own app for this account. Apps owned by a team need "
+                      "testers too: create one under your personal account and paste its ID here.")
+        else:
+            reason = "Discord refused Normie's shared app for your account."
+        self.open_app_setup(reason)
+
+    def use_own_app(self, client_id: str) -> None:
+        """Switch to the user's own Discord app ("" = back to Normie's shared app)."""
+        self.ctrl.use_app(client_id)
+        self._show_app()
+        if client_id:
+            self.log(f"Now using your own Discord app ({client_id}). "
+                     "Approve the request in Discord to connect.")
+        else:
+            self.log("Now using Normie's shared app. Approve the request in Discord to connect.")
 
     def toggle_enabled(self) -> None:
         self.var_enabled.set(not self.var_enabled.get())
@@ -1705,10 +2017,7 @@ class App(tk.Tk):
     def show_window(self) -> None:
         self.deiconify()
         self.state("normal")
-        self.lift()
-        self.attributes("-topmost", True)  # Windows won't let us steal focus from another window
-        self.after(100, lambda: self.attributes("-topmost", False))
-        self.focus_force()
+        bring_to_front(self)
 
     def _target_moved(self, _=None, save=True) -> None:
         self.lbl_target.configure(text=f"{round(self.var_target.get())} dBFS")

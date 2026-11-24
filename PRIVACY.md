@@ -20,7 +20,7 @@ uses the internet is to exchange or refresh your Discord login token with Discor
 | Discord's audio output setting: the device it plays on and the names of your audio devices | Your Discord app | Captures the same device Discord plays on, and follows it when you change it | Only the name of a device you pick by hand |
 | Audio playing on Discord's output device (or the one you select) | Windows audio loopback (WASAPI) | Every 100 ms the sound is reduced to a single loudness number. **The audio itself is never recorded, saved or sent anywhere.** | No |
 | Discord login tokens (access token and refresh token) | Discord, after you authorize Normie | Lets Normie reconnect without asking for authorization every time | Yes, in the configuration file |
-| Your settings (target level, speed, limits, device, tray option) | You | Applies your preferences | Yes, in the configuration file |
+| Your settings (target level, speed, limits, device, tray option, and the Application ID of your own Discord app if you set one up) | You | Applies your preferences | Yes, in the configuration file |
 
 The activity log and all measurements live only in memory and disappear when you close
 the app.
@@ -45,11 +45,15 @@ Normie disconnects.
 Normie makes exactly these connections:
 
 1. **Your local Discord app**, through the Discord IPC pipe on your computer. This
-   connection never leaves your machine.
+   connection never leaves your machine. Checking the Application ID of your own Discord
+   app, during its setup, also happens over this connection.
 2. **`https://discord.com/api/oauth2/token`**, only to exchange the authorization code
    for a token the first time you authorize Normie, and to refresh that token when it
-   expires. The request contains Normie's public client ID, the code or refresh token,
-   and a one-time PKCE verifier.
+   expires. The request contains the public client ID of the Discord app in use (Normie's,
+   or your own), the code or refresh token, and a one-time PKCE verifier.
+
+The **Open Developer Portal** button in the own-app setup opens Discord's website in your
+web browser. That visit is between your browser and Discord; Normie itself sends nothing.
 
 There are no other connections: no update checks, analytics, crash reports, advertising
 or third-party services. This was verified by reviewing the source code and its
