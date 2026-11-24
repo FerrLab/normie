@@ -55,35 +55,42 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
 
-      - name: Stamp the version into the script
+      - name: Stamp the version into the package
         run: |
-          sed -i "s/^APP_VERSION = \"dev\"/APP_VERSION = \"$VERSION\"/" discord_normalizer.py
-          grep -q "^APP_VERSION = \"$VERSION\"" discord_normalizer.py
+          sed -i "s/^APP_VERSION = \"dev\"/APP_VERSION = \"$VERSION\"/" normie/__init__.py
+          grep -q "^APP_VERSION = \"$VERSION\"" normie/__init__.py
 
-      - name: Check that the script imports
-        run: python -c "import discord_normalizer as d; print(d.APP_NAME, d.APP_VERSION)"
+      - name: Check that every module imports
+        run: python -c "import normie, normie.__main__, normie.gui.app; print(normie.APP_NAME, normie.APP_VERSION)"
 
       - name: Build the icon
         run: >
-          python -c "import discord_normalizer as d;
-          d.make_icon_image(256).save('normie.ico',
+          python -c "from normie.gui.theme import make_icon_image;
+          make_icon_image(256).save('normie.ico',
           sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])"
 
       - name: Build the .exe
         # pystray picks its backend at runtime, so PyInstaller can't see it on its own.
+        # PyInstaller runs __main__.py as a plain script: --paths . lets it import `normie`.
         run: >
           pyinstaller --noconfirm --onefile --windowed
           --name normie --icon normie.ico
-          --hidden-import pystray._win32
-          discord_normalizer.py
+          --paths . --hidden-import pystray._win32
+          normie/__main__.py
+
+      - name: Build the .pyz
+        # The package zipped with a root __main__.py: `python normie.pyz` runs normie.__main__.main().
+        run: |
+          rm -rf build/pyz && mkdir -p build/pyz release
+          cp -r normie build/pyz/normie
+          find build/pyz -name __pycache__ -type d -prune -exec rm -rf {} +
+          python -m zipapp build/pyz -o release/normie.pyz -m "normie.__main__:main" -c
 
       - name: Collect release files
         run: |
-          mkdir -p release
           cp dist/normie.exe release/normie.exe
-          cp discord_normalizer.py release/normie.py
           cp requirements.txt release/requirements.txt
-          cd release && sha256sum normie.exe normie.py requirements.txt > SHA256SUMS.txt
+          cd release && sha256sum normie.exe normie.pyz requirements.txt > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       - name: Publish the release
