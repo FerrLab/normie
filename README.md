@@ -40,6 +40,8 @@ python discord_normalizer.py
 1. Click **Connect**.
 2. The first time, Discord shows an authorization request → **Authorize**.
    After that, Normie reconnects on its own whenever it starts.
+   If Discord refuses your account, Normie opens a short guide to use your own Discord
+   app instead — see [Normie's shared app vs. your own](#normies-shared-app-vs-your-own).
 3. Join a voice call. Each person shows up on a card:
    - **bar**: how loud you hear them, with a white mark at the target
      (green = on target, yellow = quiet, red = loud);
@@ -59,6 +61,7 @@ python discord_normalizer.py
 | Advanced settings → Speed | How much of the error is corrected per ~2 s of speech. |
 | Advanced settings → Allowed volume | Limits for the volume (Discord accepts 0–200%). |
 | Advanced settings → Monitored output | **Same as Discord (automatic)** by default: captures the device Discord plays on and follows it when you change it in Discord. You can also pick a device by hand. |
+| Advanced settings → Discord app | Normie's shared app by default. **Use my own app…** walks you through creating your own Discord app (about 2 minutes). |
 | Advanced settings → Minimizing hides Normie in the tray | Turn off to minimize normally. |
 | Activity | History of adjustments and errors. |
 
@@ -80,8 +83,9 @@ python discord_normalizer.py
 ```
 
 Normie logs in with the Discord application whose ID is in `CLIENT_ID`, at the top of
-the script. It's a **Public Client**, so authorization uses PKCE: every login creates a
-one-time random code instead of an app password, and there is no client secret.
+the script, or with your own app if you set one up. Either way it's a **Public Client**,
+so authorization uses PKCE: every login creates a one-time random code instead of an app
+password, and there is no client secret.
 
 ## Privacy
 
@@ -98,15 +102,28 @@ All processing happens on your computer:
 
 Full details in the [Privacy Policy](PRIVACY.md).
 
-## Using Normie with other accounts or your own app
+## Normie's shared app vs. your own
 
-- **Other Discord accounts:** for apps that Discord hasn't approved for RPC, only the
-  app's owner and authorized accounts — members of the app's team and its testers — can
-  connect. Add your friends to the team or as testers in the Developer Portal;
-  otherwise their authorization will be refused.
-- **Your own app:** create one at <https://discord.com/developers/applications>. Under
-  **OAuth2**, turn on **Public Client**, add the redirect `http://localhost` and replace
-  `CLIENT_ID` at the top of the script.
+Discord only lets an app control voice settings (RPC) for everyone after it approves the
+app. Until then:
+
+- **Normie's shared app** (the default) only works for accounts on its **App Testers**
+  list, up to 50 people. Being on the app's team isn't enough. Anyone else gets
+  `invalid_scope` when they click **Authorize**. The app's developer adds testers under
+  *Developer Portal → Normie → App Testers*.
+- **Your own app** works for you right away, because an app's owner needs no list. In
+  Normie, open **Advanced settings → Discord app → Use my own app…** (it also opens by
+  itself when Discord refuses the shared app) and follow the three steps:
+  1. create an app at <https://discord.com/developers/applications> under your
+     **personal** account — apps owned by a team need testers too;
+  2. under **OAuth2**, add the redirect `http://localhost`, turn on **Public Client** and
+     save;
+  3. paste the **Application ID** from *General Information*. Normie checks it with your
+     Discord app before saving it.
+
+  **Go back to Normie's shared app**, in the same window, undoes it.
+
+If you publish your own fork, replace `CLIENT_ID` at the top of the script.
 
 ## Limitations
 
